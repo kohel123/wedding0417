@@ -11,13 +11,14 @@ import { FAQSection } from './components/FAQSection';
 import { Footer } from './components/Footer';
 import { FloatingCTA } from './components/FloatingCTA';
 import { AdItem } from './types';
+import { DEFAULT_CHEONAN_EXPOS, DEFAULT_CHUNGCHEONG_EXPOS } from './data/defaultExpos';
 
 export default function App() {
-  const [cheonanExpos, setCheonanExpos] = useState<AdItem[]>([]);
-  const [chungcheongExpos, setChungcheongExpos] = useState<AdItem[]>([]);
-  const [allExpos, setAllExpos] = useState<AdItem[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [lastUpdated, setLastUpdated] = useState<string>('');
+  const [cheonanExpos, setCheonanExpos] = useState<AdItem[]>(DEFAULT_CHEONAN_EXPOS);
+  const [chungcheongExpos, setChungcheongExpos] = useState<AdItem[]>(DEFAULT_CHUNGCHEONG_EXPOS);
+  const [allExpos, setAllExpos] = useState<AdItem[]>(DEFAULT_CHUNGCHEONG_EXPOS);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [lastUpdated, setLastUpdated] = useState<string>(new Date().toISOString());
 
   const fetchExposData = async () => {
     setIsLoading(true);
@@ -27,14 +28,14 @@ export default function App() {
         throw new Error(`HTTP error ${response.status}`);
       }
       const data = await response.json();
-      if (data.success) {
-        setCheonanExpos(data.cheonan_expos || []);
-        setChungcheongExpos(data.chungcheong_expos || []);
-        setAllExpos(data.all_advertisements || []);
+      if (data.success && data.cheonan_expos && data.cheonan_expos.length > 0) {
+        setCheonanExpos(data.cheonan_expos);
+        setChungcheongExpos(data.chungcheong_expos || data.cheonan_expos);
+        setAllExpos(data.all_advertisements || data.cheonan_expos);
         setLastUpdated(data.updated_at || new Date().toISOString());
       }
     } catch (err) {
-      console.warn('Failed to fetch realtime expos from server route, using initial state:', err);
+      console.log('Running on static host or offline, using default verified schedule data.');
     } finally {
       setIsLoading(false);
     }
