@@ -24,11 +24,7 @@ const AFFILIATE_ID = "wedding2026";
 
 app.use(express.json());
 
-// In-memory cache for external API
-let cachedData: { timestamp: number; data: any } | null = null;
-const CACHE_TTL = 1000 * 60 * 3; // 3 minutes cache
-
-// Helper to format affiliate link
+// 어필리에이트 URL 포맷팅 함수
 function formatAffiliateUrl(originalUrl?: string): string {
   if (!originalUrl) return "#";
   const trimmed = originalUrl.trim();
@@ -41,7 +37,7 @@ function formatAffiliateUrl(originalUrl?: string): string {
   return trimmed + "/" + AFFILIATE_ID;
 }
 
-// Fallback Cheonan wedding expos data in case network is down
+// 외부 네트워크 장애 시 안전망 역할을 할 폴백 데이터
 const fallbackCheonanExpos: AdItem[] = [
   {
     id: "fb-1",
@@ -68,60 +64,52 @@ const fallbackCheonanExpos: AdItem[] = [
     ad_url: "https://cpaad.co.kr/ad/cheonan-asan/",
     target_url: "https://cpaad.co.kr/ad/cheonan-asan/wedding2026",
     benefits: ["사전신청자 무료입장 + VIP 사은품", "삼성/LG 신혼가전 최대 45% 임직원가 지원", "1:1 맞춤 웨딩플래너 무료 동행 서비스"]
-  },
-  {
-    id: "fb-3",
-    region: "chungcheong",
-    ad_location: "충남 천안시 서북구 불당동",
-    gather_name: "천안 불당 신도시 VIP 웨딩페스타",
-    ad_title: "하이엔드 드레스 & 본식스냅 초대전",
-    ad_date: "이번 달 둘째/넷째 주말 (11:00 ~ 20:00)",
-    venue: "천안 불당 갤러리아 센터시티 인근 특설행사장",
-    ad_thumbnail2: "https://images.unsplash.com/photo-1544077960-604201fe74bc?w=800&auto=format&fit=crop&q=80",
-    ad_url: "https://cpaad.co.kr/ad/buldang-vip/",
-    target_url: "https://cpaad.co.kr/ad/buldang-vip/wedding2026",
-    benefits: ["프리미엄 수입 드레스 무료 피팅권", "예복 맞춤 셔츠 & 수제화 증정", "허니문 인기 휴양지 조기예약 특별할인"]
   }
 ];
 
-// API Route to fetch real-time wedding expos from CPAAD
+// CPAAD API 실시간 연동 엔드포인트
 app.get("/api/expos", async (req, res) => {
   try {
-    const now = Date.now();
-    if (cachedData && now - cachedData.timestamp < CACHE_TTL) {
-      return res.json(cachedData.data);
-    }
-
+    // 실시간 조회를 위해 캐시 검사 로직을 제거하고 매 요청마다 API 호출
     const response = await fetch("https://cpaad.co.kr/api/ad_json.php", {
+      method: "GET",
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json, text/plain, */*"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Cache-Control": "no-cache"
       },
-      signal: AbortSignal.timeout(5000)
+      signal: AbortSignal.timeout(7000) // 실시간 응답 대기 시간을 7초로 설정
     });
 
     if (!response.ok) {
-      throw new Error(`External API responded with status ${response.status}`);
+      throw new Error(`CPAAD API 응답 실패 (Status: ${response.status})`);
     }
 
     const rawData = await response.json();
-    const advertisements: AdItem[] = Array.isArray(rawData?.advertisements)
-      ? rawData.advertisements
-      : [];
+    
+    // CPAAD API가 배열로 직접 넘어오거나 객체 속성으로 넘어오는 구조 모두 대응
+    let rawList: AdItem[] = [];
+    if (Array.isArray(rawData)) {
+      rawList = rawData;
+    } else if (Array.isArray(rawData?.advertisements)) {
+      rawList = rawData.advertisements;
+    } else if (Array.isArray(rawData?.data)) {
+      rawList = rawData.data;
+    }
 
-    // Process ads with affiliate URL
-    const processedAds = advertisements.map((item: AdItem, idx: number) => {
-      const rawUrl = item.ad_url || "";
+    // 어필리에이트 태그 삽입 및 데이터 정교화
+    const processedAds = rawList.map((item: AdItem, idx: number) => {
+      const rawUrl = item.ad_url || item.target_url || "";
       const targetUrl = formatAffiliateUrl(rawUrl);
       return {
         ...item,
-        id: item.id || `ad-${idx}`,
+        id: item.id || `realtime-ad-${idx}`,
         target_url: targetUrl,
         ad_thumbnail2: item.ad_thumbnail2 || item.ad_thumbnail || "https://images.unsplash.com/photo-1519741497674-611481863552?w=800&auto=format&fit=crop&q=80"
       };
     });
 
-    // Search Cheonan specifically
+    // 천안 지역 필터링
     const cheonanList = processedAds.filter((item) => {
       const location = String(item.ad_location || "");
       const name = String(item.gather_name || "");
@@ -129,35 +117,36 @@ app.get("/api/expos", async (req, res) => {
       return location.includes("천안") || name.includes("천안") || title.includes("천안");
     });
 
-    // Chungcheong list
+    // 충청권 필터링
     const chungcheongList = processedAds.filter((item) => {
       const region = String(item.region || "").toLowerCase();
       const location = String(item.ad_location || "");
-      return region === "chungcheong" || location.includes("충남") || location.includes("충북") || location.includes("대전") || location.includes("세종") || location.includes("천안") || location.includes("아산");
+      return (
+        region === "chungcheong" ||
+        location.includes("충남") ||
+        location.includes("충북") ||
+        location.includes("대전") ||
+        location.includes("세종") ||
+        location.includes("천안") ||
+        location.includes("아산")
+      );
     });
 
-    // If no specific Cheonan items from remote, merge with fallback
-    const finalCheonan = cheonanList.length > 0 ? cheonanList : fallbackCheonanExpos;
-
-    const result = {
+    // 실시간 검색 결과 리턴 (결과가 없을 경우 폴백 적용)
+    return res.json({
       success: true,
       source: "realtime",
-      cheonan_expos: finalCheonan,
-      chungcheong_expos: chungcheongList.length > 0 ? chungcheongList : finalCheonan,
+      cheonan_expos: cheonanList.length > 0 ? cheonanList : fallbackCheonanExpos,
+      chungcheong_expos: chungcheongList.length > 0 ? chungcheongList : fallbackCheonanExpos,
       all_count: processedAds.length,
       all_advertisements: processedAds,
       updated_at: new Date().toISOString()
-    };
+    });
 
-    cachedData = {
-      timestamp: now,
-      data: result
-    };
-
-    return res.json(result);
   } catch (error: any) {
-    console.warn("External API fetch failed or timed out, returning fallback data:", error?.message);
-    const fallbackResult = {
+    console.warn("CPAAD 실시간 연동 실패, 폴백 데이터 반환:", error?.message);
+    
+    return res.json({
       success: true,
       source: "fallback",
       cheonan_expos: fallbackCheonanExpos,
@@ -165,13 +154,12 @@ app.get("/api/expos", async (req, res) => {
       all_count: fallbackCheonanExpos.length,
       all_advertisements: fallbackCheonanExpos,
       updated_at: new Date().toISOString(),
-      note: "실시간 데이터를 로드하여 안전하게 표시 중입니다."
-    };
-    return res.json(fallbackResult);
+      note: "실시간 서버 연결 지연으로 안전 데이터를 표시합니다."
+    });
   }
 });
 
-// Health check endpoint
+// Health check 엔드포인트
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
@@ -192,7 +180,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Cheonan Wedding Fair server running at http://0.0.0.0:${PORT}`);
+    console.log(`천안 웨딩 박람회 서버 실행 중: http://0.0.0.0:${PORT}`);
   });
 }
 
